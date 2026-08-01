@@ -52,11 +52,11 @@ jobs:
       test: ${{ steps.gate.outputs.test }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
 
       - name: Checkout Aido scripts (remote install)
         if: inputs.aido_ref != ''
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
         with:
           repository: aido-dev/aido
           ref: ${{ inputs.aido_ref }}
