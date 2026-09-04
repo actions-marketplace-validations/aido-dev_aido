@@ -42,6 +42,7 @@
 const fs = require('fs');
 const path = require('path');
 const { DEFAULT_MODELS, generate } = require('../lib/providers');
+const { SECURITY_GUARDRAIL } = require('../lib/text');
 const {
   octokit,
   getRepo,
@@ -68,6 +69,58 @@ function displayLabel(p) {
   if (p?.provider && p?.persona) return `${p.persona} – ${p.provider}`;
   if (p?.provider) return `${p.provider} reviewer`;
   return 'AI reviewer';
+}
+
+/**
+ * Persona guidance: each persona's real instruction text (its `description`, or
+ * `prompt` with `{{template}}` scaffolding stripped), not just its display name.
+ * Consumers put house rules in that text and expect them to be honored.
+ */
+function personaGuidanceBlock(personas) {
+  return (personas || [])
+    .map((p) => {
+      const label = displayLabel(p);
+      const raw = (p?.description || p?.prompt || '').trim();
+      const body = raw
+        .replace(/\{\{[^}]*\}\}/g, '') // drop {{diff}}, {{issueTitle}}, … placeholders
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+      return body ? `- ${label}:\n${body}` : `- ${label}`;
+    })
+    .join('\n\n');
+}
+
+/**
+ * Shared reviewer context injected into BOTH the consolidated review and the
+ * inline-suggestions pass, so suggestions honor the same personas/constraints
+ * as the summary (they previously ran context-free and contradicted it).
+ */
+function reviewerContextBlock(personas, context) {
+  const guidance = personaGuidanceBlock(personas);
+  const parts = [
+    SECURITY_GUARDRAIL,
+    '',
+    'PROJECT CONTEXT / CONSTRAINTS (house rules — honor these; they override generic best-practice advice):',
+    guidance || '(no reviewer personas configured)',
+    '',
+    `PR Title: ${context.prTitle || ''}`,
+    `PR Description: ${context.prBody || 'No description'}`,
+  ];
+  if (context.issueTitle) {
+    parts.push(`Linked Issue: ${context.issueTitle}\n${context.issueBody || ''}`);
+  }
+  return parts.join('\n');
+}
+
+/** Whether to run the separate inline-suggestions pass (reviewer.suggestions !== false). */
+function suggestionsEnabled(reviewerCfg) {
+  return reviewerCfg?.suggestions !== false;
+}
+
+/** Cap the suggestion list to reviewer.maxSuggestions (when a valid, non-negative number). */
+function capSuggestions(list, reviewerCfg) {
+  const max = Number(reviewerCfg?.maxSuggestions);
+  return Number.isFinite(max) && max >= 0 ? list.slice(0, max) : list;
 }
 
 async function getPrContext(owner, repo, prNumber) {
@@ -116,10 +169,16 @@ function makeConsolidatedPrompt(personas, context) {
     { name: 'Style', cue: 'clarity, consistency, dead code, docs' },
   ];
   const personasList = personas.map((p) => displayLabel(p)).join(', ');
+  const guidance = personaGuidanceBlock(personas);
   return `
+${SECURITY_GUARDRAIL}
+
 ROLE:
 You are a world-class code review agent acting as multiple specialists: ${personasList}.
 Operate within GitHub PR constraints. Be precise, constructive, and strictly follow these rules.
+
+REVIEWER GUIDANCE (house rules from the configured personas — honor these; they override generic best practices):
+${guidance || '(none)'}
 
 CONTEXT:
 PR Title: ${context.prTitle}
@@ -170,6 +229,44 @@ OUTPUT (STRICT):
 3) Faceted notes (${facets.map((f) => f.name).join(', ')}) as terse bullets (no code)
 4) Code Suggestions only (use the exact format above; no extra prose outside suggestions)
 `;
+}
+
+/**
+ * Inline-suggestions pass prompt. Prepends the shared reviewer context so the
+ * suggestions honor the same personas/house-rules as the consolidated review.
+ */
+function makeSuggestionsPrompt(personas, context, files) {
+  const changedList = files.map((f) => `- ${f.filename}`).join('\n');
+  return `
+${reviewerContextBlock(personas, context)}
+
+You are a code review assistant. Honor the PROJECT CONTEXT / CONSTRAINTS above — never
+propose a change that contradicts those house rules. Output code suggestions in this EXACT format:
+
+File: exact/path/to/file.ext
+Line: X  (or Lines: X-Y for multi-line)
+Issue: brief description
+Priority: Urgent|High|Medium|Low
+Suggestion:
+\`\`\`suggestion
+<exact replacement code>
+\`\`\`
+
+CRITICAL: Line numbers MUST correspond to the NEW file (after changes).
+Look at hunk headers like "@@ -10,5 +12,8 @@" - the +12,8 means new file starts at line 12.
+Count lines that start with '+' or ' ' (space), NOT lines that start with '-'.
+
+Changed files in this PR:
+${changedList}
+
+PR Diff:
+\`\`\`diff
+${context.diff}
+\`\`\`
+
+Output ONLY valid suggestions. Skip if you cannot find the exact line, or if a suggestion
+would violate the project constraints above.
+`.trim();
 }
 
 /**
@@ -230,6 +327,13 @@ function validateSuggestion(suggestion, lineMap) {
   }
   const actualCode = actualLines.join('\n').trim();
   const suggestedCode = code.trim();
+
+  // Drop no-op suggestions: the replacement is byte-identical to the current
+  // code. Some models (notably gemini-2.5-flash on large diffs) re-emit the
+  // existing lines as a "suggestion", producing noisy zero-diff comments.
+  if (actualCode === suggestedCode) {
+    return { valid: false, reason: 'Suggestion is identical to the current code (no-op)' };
+  }
 
   // Extract key identifiers from both
   const extractIdentifiers = (text) => {
@@ -656,7 +760,7 @@ async function main() {
   const defaultProvider = (reviewerCfg.provider || 'GEMINI').toUpperCase();
   const defaultModel = reviewerCfg.model?.[defaultProvider] || DEFAULT_MODELS[defaultProvider];
 
-  const configuredProvider = ['CLAUDE', 'CHATGPT', 'GEMINI'].includes(envProvider)
+  const configuredProvider = ['CLAUDE', 'CHATGPT', 'GEMINI', 'OPENAI'].includes(envProvider)
     ? envProvider
     : defaultProvider;
   const model = envModel || defaultModel;
@@ -664,67 +768,46 @@ async function main() {
   // Fall back to Gemini if the configured provider's key is missing
   const provider =
     (configuredProvider === 'CLAUDE' && process.env.CLAUDE_API_KEY) ||
-    (configuredProvider === 'CHATGPT' && process.env.CHATGPT_API_KEY)
+    (configuredProvider === 'CHATGPT' && process.env.CHATGPT_API_KEY) ||
+    (configuredProvider === 'OPENAI' && process.env.OPENAI_API_KEY)
       ? configuredProvider
       : 'GEMINI';
 
   console.log(`Using provider: ${provider}, model: ${model}`);
 
-  const callProvider = (prompt) =>
-    generate(provider, prompt, {
-      model,
-      maxTokens: 1800,
-      temperature: provider === 'CHATGPT' ? 1 : 0.2,
-    });
+  const callProvider = (prompt) => {
+    const opts = { model, maxTokens: 1800 };
+    // ChatGPT and Gemini accept a sampling temperature; newer Claude models
+    // (Opus 4.7+ / Fable 5) removed it and 400 if it's sent, so omit it there.
+    if (provider === 'CHATGPT') opts.temperature = 1;
+    else if (provider === 'GEMINI') opts.temperature = 0.2;
+    else if (provider === 'OPENAI') opts.baseURL = reviewerCfg.baseURL;
+    return generate(provider, prompt, opts);
+  };
 
   const consolidatedPrompt = makeConsolidatedPrompt(personas, context);
   const consolidated = await callProvider(consolidatedPrompt);
 
   console.log('Consolidated review completed');
 
-  // Suggestions-only pass
-  const changedList = files.map((f) => `- ${f.filename}`).join('\n');
-  const suggestionsOnlyPrompt = `
-You are a code review assistant. Output code suggestions in this EXACT format:
-
-File: exact/path/to/file.ext
-Line: X  (or Lines: X-Y for multi-line)
-Issue: brief description
-Priority: Urgent|High|Medium|Low
-Suggestion:
-\`\`\`suggestion
-<exact replacement code>
-\`\`\`
-
-CRITICAL: Line numbers MUST correspond to the NEW file (after changes).
-Look at hunk headers like "@@ -10,5 +12,8 @@" - the +12,8 means new file starts at line 12.
-Count lines that start with '+' or ' ' (space), NOT lines that start with '-'.
-
-Changed files in this PR:
-${changedList}
-
-PR Diff:
-\`\`\`diff
-${context.diff}
-\`\`\`
-
-Output ONLY valid suggestions. Skip if you cannot find the exact line.
-`.trim();
-
-  // The consolidated review body already succeeded above. Treat the separate
-  // suggestions pass as best-effort: if it fails (e.g. a transient provider
-  // error that outlasts retries), still post the review body rather than
-  // discarding the whole review.
+  // Suggestions-only pass (best-effort; skippable via reviewer.suggestions=false).
+  // It now receives the shared reviewer context so it honors the same personas
+  // and house rules as the consolidated review above.
   let suggestionsOnlyText = '';
   let suggestionsError = null;
-  try {
-    suggestionsOnlyText = await callProvider(suggestionsOnlyPrompt);
-    console.log('Suggestions extraction completed');
-  } catch (e) {
-    suggestionsError = e;
-    console.error(
-      `Suggestions pass failed; posting review body without inline suggestions: ${e?.message || e}`,
-    );
+  if (suggestionsEnabled(reviewerCfg)) {
+    const suggestionsOnlyPrompt = makeSuggestionsPrompt(personas, context, files);
+    try {
+      suggestionsOnlyText = await callProvider(suggestionsOnlyPrompt);
+      console.log('Suggestions extraction completed');
+    } catch (e) {
+      suggestionsError = e;
+      console.error(
+        `Suggestions pass failed; posting review body without inline suggestions: ${e?.message || e}`,
+      );
+    }
+  } else {
+    console.log('Inline suggestions disabled via reviewer.suggestions=false');
   }
 
   let suggestions = parseSuggestions(suggestionsOnlyText, files);
@@ -751,8 +834,16 @@ Output ONLY valid suggestions. Skip if you cannot find the exact line.
 
   console.log(`Validated ${validated.length} of ${suggestions.length} suggestions`);
 
+  // Cap to reviewer.maxSuggestions (if configured), then build the review comments.
+  const finalSuggestions = capSuggestions(validated, reviewerCfg);
+  if (finalSuggestions.length !== validated.length) {
+    console.log(
+      `Capped suggestions to ${finalSuggestions.length} of ${validated.length} (maxSuggestions)`,
+    );
+  }
+
   // Create GitHub review comments using line+side API
-  const comments = validated.map((s) => {
+  const comments = finalSuggestions.map((s) => {
     const em =
       s.priority === 'URGENT'
         ? '🔴'
@@ -804,7 +895,10 @@ Output ONLY valid suggestions. Skip if you cannot find the exact line.
       ' re-run `aido review` to retry suggestions.';
   }
 
-  const reviewEvent = comments.length > 0 ? 'REQUEST_CHANGES' : 'COMMENT';
+  // The review's own recommendation drives the GitHub event — a review can
+  // carry minor inline nits and still be an Approve. (Mapping by comment count
+  // made every review with a single suggestion block the PR.)
+  const reviewEvent = reviewEventFromBody(consolidatedBody);
 
   console.log(`\nPosting review with ${comments.length} inline comments (event: ${reviewEvent})`);
 
@@ -822,6 +916,12 @@ Output ONLY valid suggestions. Skip if you cannot find the exact line.
     );
   });
 
+  const reviewBody =
+    (consolidatedBody || '🤖 Consolidated AI review attached with inline suggestions.') +
+    '\n\n---\n_Response generated using ' +
+    model +
+    '_';
+
   try {
     await octokit.pulls.createReview({
       owner,
@@ -829,11 +929,7 @@ Output ONLY valid suggestions. Skip if you cannot find the exact line.
       pull_number: prNumber,
       event: reviewEvent,
       commit_id: context.headSha,
-      body:
-        (consolidatedBody || '🤖 Consolidated AI review attached with inline suggestions.') +
-        '\n\n---\n_Response generated using ' +
-        model +
-        '_',
+      body: reviewBody,
       comments,
     });
 
@@ -843,8 +939,41 @@ Output ONLY valid suggestions. Skip if you cannot find the exact line.
     if (error.response) {
       console.error('GitHub API response:', JSON.stringify(error.response.data, null, 2));
     }
+    // A formal event can be rejected (e.g. GitHub forbids APPROVE/REQUEST_CHANGES
+    // on your own PR — 422). Don't lose the review: retry once as a plain COMMENT.
+    if (reviewEvent !== 'COMMENT') {
+      console.warn(`Retrying review as COMMENT (was ${reviewEvent})…`);
+      await octokit.pulls.createReview({
+        owner,
+        repo,
+        pull_number: prNumber,
+        event: 'COMMENT',
+        commit_id: context.headSha,
+        body: reviewBody,
+        comments,
+      });
+      console.log('\n✅ Review posted successfully (as COMMENT)');
+      return;
+    }
     throw error;
   }
+}
+
+/**
+ * Map the review's stated recommendation to a GitHub review event. The
+ * recommendation parsed from the review body is authoritative — NOT the mere
+ * presence of inline comments. A plain "Approve" approves even when the review
+ * carries minor inline nits; "Approve with minor changes" posts a non-blocking
+ * COMMENT; only an explicit "Request changes" blocks the PR. Anything we can't
+ * parse falls back to COMMENT so the bot never blocks a PR spuriously.
+ */
+function reviewEventFromBody(body) {
+  const m = /Recommendation:?\**\s*([^\n]+)/i.exec(body || '');
+  const rec = (m ? m[1] : '').toLowerCase();
+  if (/request\s+changes?/.test(rec)) return 'REQUEST_CHANGES';
+  // "Approve" alone → APPROVE; "Approve with minor changes" (or nits) → COMMENT.
+  if (/\bapprove\b/.test(rec) && !/\b(minor|nit|with)\b/.test(rec)) return 'APPROVE';
+  return 'COMMENT';
 }
 
 if (require.main === module) {
@@ -854,4 +983,15 @@ if (require.main === module) {
   });
 }
 
-module.exports = { buildLineMap, validateSuggestion, parseSuggestions };
+module.exports = {
+  buildLineMap,
+  validateSuggestion,
+  parseSuggestions,
+  personaGuidanceBlock,
+  reviewerContextBlock,
+  makeConsolidatedPrompt,
+  makeSuggestionsPrompt,
+  suggestionsEnabled,
+  capSuggestions,
+  reviewEventFromBody,
+};

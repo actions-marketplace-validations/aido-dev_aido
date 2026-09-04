@@ -1,22 +1,38 @@
-name: Aido Docs (Reusable)
+# -----------------------------------------------------------------------------
+# Aido Digest — the "what shipped" digest
+#
+# Summarizes the pull requests merged in a recent window (default: 7 days) into
+# a skimmable digest and posts it as a new GitHub Issue ("📦 What shipped — …").
+# Configure the window, model, and more in
+# .github/scripts/digest/aido-digest-config.json.
+#
+# Runs on a weekly schedule and on manual dispatch. Two ways to use it:
+#   • Copy-based install: this file lives in your repo and runs on schedule.
+#   • Remote install: a thin caller in your repo runs on schedule and calls this
+#     workflow with `aido_ref` (see examples/remote/aido-digest.yml).
+#
+# Scheduled workflows run from the default branch. To change the cadence, edit
+# the cron below (and keep the config `lookbackDays` in sync).
+# -----------------------------------------------------------------------------
+
+name: Aido Digest (Reusable)
 
 on:
+  schedule:
+    - cron: '0 9 * * 1' # Mondays at 09:00 UTC
+  workflow_dispatch: {}
   workflow_call:
     inputs:
-      pr_number:
-        description: 'Pull request number for docs drafting/augmentation'
-        required: true
-        type: number
       aido_ref:
-        description: "Git ref of aido-dev/aido to run Aido from (remote install). Leave empty to use this repository's own copy of the scripts."
+        description: "Git ref of aido-dev/aido to run Aido from (remote install). Leave empty to use the calling repository's own copy of the scripts."
         required: false
         type: string
         default: ''
     secrets:
       CHATGPT_API_KEY:
-        required: true
+        required: false
       GEMINI_API_KEY:
-        required: true
+        required: false
       CLAUDE_API_KEY:
         required: false
       OPENAI_API_KEY:
@@ -24,12 +40,13 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
   issues: write
+  discussions: write
+  pull-requests: read
 
 jobs:
-  aido-docs:
-    name: Docs
+  aido-digest:
+    name: Aido Digest
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -64,24 +81,15 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Install dependencies for Aido Docs
+      - name: Install dependencies for Aido digest
         run: |
           npm install --ignore-scripts --no-audit --no-fund openai@7.4.0 @octokit/rest@22.0.1 @google/generative-ai@0.24.1 @anthropic-ai/sdk@0.117.1
 
-      - name: Create synthetic GitHub event (PR context)
-        env:
-          PR_NUMBER: ${{ inputs.pr_number }}
-        run: |
-          EVENT_FILE="$RUNNER_TEMP/aido_event.json"
-          echo "{\"pull_request\":{\"number\": \"$PR_NUMBER\"}}" > "$EVENT_FILE"
-          echo "EVENT_FILE=$EVENT_FILE" >> $GITHUB_ENV
-
-      - name: Run Aido Docs
+      - name: Run Aido Digest
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CHATGPT_API_KEY: ${{ secrets.CHATGPT_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          GITHUB_EVENT_PATH: ${{ env.EVENT_FILE }}
-        run: node ${{ steps.aido.outputs.scripts }}/docs/aido-docs.js
+        run: node ${{ steps.aido.outputs.scripts }}/digest/aido-digest.js

@@ -26,10 +26,10 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Install test dependencies
-        run: npm install --no-save @octokit/rest
+        run: npm install --no-save --ignore-scripts --no-audit --no-fund @octokit/rest@22.0.1
 
       - name: Run unit tests
         env:

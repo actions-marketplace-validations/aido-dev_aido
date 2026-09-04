@@ -4,7 +4,17 @@ const assert = require('node:assert/strict');
 // aido-review.js requires lib/github at load, which needs a token for Octokit.
 process.env.GITHUB_TOKEN = process.env.GITHUB_TOKEN || 'test-token';
 
-const { buildLineMap, validateSuggestion, parseSuggestions } = require('../review/aido-review');
+const {
+  buildLineMap,
+  validateSuggestion,
+  parseSuggestions,
+  personaGuidanceBlock,
+  makeConsolidatedPrompt,
+  makeSuggestionsPrompt,
+  suggestionsEnabled,
+  capSuggestions,
+  reviewEventFromBody,
+} = require('../review/aido-review');
 
 // --- buildLineMap ---
 
@@ -54,6 +64,22 @@ test('validateSuggestion rejects lines outside the diff', () => {
   );
   assert.equal(result.valid, false);
   assert.match(result.reason, /Line 99 not found/);
+});
+
+test('validateSuggestion drops a no-op suggestion identical to the current code', () => {
+  const map = mapFor(['  const info = await octokit.graphql(query, vars);']);
+  const result = validateSuggestion(
+    {
+      startLine: 1,
+      endLine: 1,
+      // Same line the model was "reviewing" — differs only by surrounding whitespace.
+      code: 'const info = await octokit.graphql(query, vars);',
+      issue: 'Explaining efficient GraphQL query design.',
+    },
+    map,
+  );
+  assert.equal(result.valid, false);
+  assert.match(result.reason, /no-op|identical/i);
 });
 
 test('validateSuggestion blocks guard clause removal', () => {
@@ -258,4 +284,85 @@ test('parseSuggestions handles bold-markdown field labels', () => {
 test('parseSuggestions returns empty for empty input', () => {
   assert.deepEqual(parseSuggestions('', FILES), []);
   assert.deepEqual(parseSuggestions(null, FILES), []);
+});
+
+// --- v1.5.1: reviewer context reaches the inline-suggestions pass + controls ---
+
+const CONSTRAINT =
+  'This repo uses neon-http; never suggest wrapping single statements in db.transaction().';
+const ctxPersonas = [
+  {
+    name: 'DB reviewer',
+    prompt: `You review database code. ${CONSTRAINT} Issue: {{issueTitle}} Diff: {{diff}}`,
+  },
+];
+const ctx = {
+  prTitle: 'Add update',
+  prBody: 'small change',
+  issueTitle: '',
+  issueBody: '',
+  diff: 'd',
+};
+const ctxFiles = [{ filename: 'db/users.ts' }];
+
+test('personaGuidanceBlock includes persona body and strips {{template}} placeholders', () => {
+  const g = personaGuidanceBlock(ctxPersonas);
+  assert.match(g, /DB reviewer/);
+  assert.match(g, /neon-http/);
+  assert.doesNotMatch(g, /\{\{/);
+});
+
+test('makeSuggestionsPrompt injects the house rules into the suggestions pass', () => {
+  const prompt = makeSuggestionsPrompt(ctxPersonas, ctx, ctxFiles);
+  assert.match(prompt, /PROJECT CONTEXT \/ CONSTRAINTS/);
+  assert.match(prompt, /neon-http/); // the constraint now reaches the suggestions pass
+  assert.match(prompt, /db\/users\.ts/); // changed files still listed
+  assert.match(prompt, /```suggestion/); // still the exact suggestion format
+});
+
+test('makeConsolidatedPrompt now embeds persona guidance bodies, not just names', () => {
+  const prompt = makeConsolidatedPrompt(ctxPersonas, ctx);
+  assert.match(prompt, /REVIEWER GUIDANCE/);
+  assert.match(prompt, /neon-http/);
+});
+
+test('both review passes carry the untrusted-content guardrail (prompt-injection defense)', () => {
+  assert.match(makeConsolidatedPrompt(ctxPersonas, ctx), /UNTRUSTED CONTENT/);
+  assert.match(makeConsolidatedPrompt(ctxPersonas, ctx), /never as instructions/i);
+  assert.match(makeSuggestionsPrompt(ctxPersonas, ctx, ctxFiles), /UNTRUSTED CONTENT/);
+});
+
+test('suggestionsEnabled: default on, off when reviewer.suggestions === false', () => {
+  assert.equal(suggestionsEnabled({}), true);
+  assert.equal(suggestionsEnabled({ suggestions: true }), true);
+  assert.equal(suggestionsEnabled({ suggestions: false }), false);
+});
+
+test('capSuggestions: caps to maxSuggestions, ignores invalid, no cap when unset', () => {
+  const list = [1, 2, 3, 4, 5];
+  assert.deepEqual(capSuggestions(list, {}), list);
+  assert.deepEqual(capSuggestions(list, { maxSuggestions: 2 }), [1, 2]);
+  assert.deepEqual(capSuggestions(list, { maxSuggestions: 0 }), []);
+  assert.deepEqual(capSuggestions(list, { maxSuggestions: 'x' }), list);
+});
+
+// --- reviewEventFromBody ---
+
+test('reviewEventFromBody: plain Approve maps to APPROVE (even with inline nits)', () => {
+  assert.equal(reviewEventFromBody('**Recommendation:** Approve\n\nSome notes.'), 'APPROVE');
+  assert.equal(reviewEventFromBody('Recommendation: Approve'), 'APPROVE');
+});
+
+test('reviewEventFromBody: Approve with minor changes maps to COMMENT', () => {
+  assert.equal(reviewEventFromBody('**Recommendation:** Approve with minor changes'), 'COMMENT');
+});
+
+test('reviewEventFromBody: Request changes maps to REQUEST_CHANGES', () => {
+  assert.equal(reviewEventFromBody('**Recommendation:** Request changes'), 'REQUEST_CHANGES');
+});
+
+test('reviewEventFromBody: unrecognized/missing recommendation falls back to COMMENT', () => {
+  assert.equal(reviewEventFromBody('No recommendation line here.'), 'COMMENT');
+  assert.equal(reviewEventFromBody(''), 'COMMENT');
+  assert.equal(reviewEventFromBody(null), 'COMMENT');
 });

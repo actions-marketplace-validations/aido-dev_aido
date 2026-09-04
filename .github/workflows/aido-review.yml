@@ -19,6 +19,8 @@ on:
         required: false
       CLAUDE_API_KEY:
         required: false
+      OPENAI_API_KEY:
+        required: false
 
 permissions:
   contents: read
@@ -60,16 +62,18 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Install dependencies for Aido reviewers
         run: |
-          npm install openai@latest @octokit/rest @google/generative-ai @anthropic-ai/sdk
+          npm install --ignore-scripts --no-audit --no-fund openai@7.4.0 @octokit/rest@22.0.1 @google/generative-ai@0.24.1 @anthropic-ai/sdk@0.117.1
 
       - name: Create synthetic GitHub event (PR context)
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
         run: |
           EVENT_FILE="$RUNNER_TEMP/aido_event.json"
-          echo "{\"pull_request\":{\"number\": \"${{ inputs.pr_number }}\"}}" > "$EVENT_FILE"
+          echo "{\"pull_request\":{\"number\": \"$PR_NUMBER\"}}" > "$EVENT_FILE"
           echo "EVENT_FILE=$EVENT_FILE" >> $GITHUB_ENV
 
       - name: Run Aido Multi-Reviewer
@@ -78,5 +82,6 @@ jobs:
           CHATGPT_API_KEY: ${{ secrets.CHATGPT_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GITHUB_EVENT_PATH: ${{ env.EVENT_FILE }}
         run: node ${{ steps.aido.outputs.scripts }}/review/aido-review.js

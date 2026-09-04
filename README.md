@@ -13,22 +13,17 @@
 ![Supports ChatGPT](https://img.shields.io/badge/provider-ChatGPT-10a37f?logo=openai&style=flat-square)
 ![Supports Claude](https://img.shields.io/badge/provider-Claude-8a2be2?style=flat-square)
 
+[![Mistral](https://img.shields.io/badge/Mistral-FA520F?logo=mistralai&logoColor=white&style=flat-square)](#bring-any-model-openai-compatible)
+[![DeepSeek](https://img.shields.io/badge/DeepSeek-4D6BFE?logo=deepseek&logoColor=white&style=flat-square)](#bring-any-model-openai-compatible)
+[![+ any OpenAI-compatible](https://img.shields.io/badge/%2B_any_OpenAI--compatible-Kimi_%C2%B7_Grok_%C2%B7_OpenRouter-555?style=flat-square)](#bring-any-model-openai-compatible)
+
 AI agents — Copilot, Claude Code, Cursor — are opening more and more pull requests, and a human still has to understand code they didn't write. Aido keeps that human in the loop: when an **AI-authored PR** lands, it can **automatically explain, summarize, review, and document** the change. And you can run those same commands on **any PR or issue on demand** — just comment `aido <command>`.
 
-One companion, the whole review lifecycle: **review, summarize, explain, document, test, and triage** — with **Gemini, ChatGPT, or Claude**, right inside GitHub Actions. Install with a single workflow file.
-
-<!--
-  DEMO GIF — once docs/media/aido-demo.gif exists, UNCOMMENT the <p> block below to
-  render it in the hero. Record a short (~15–25s) loop showing Aido in action:
-    1. An AI-authored PR opens (or you type `aido review` in a PR comment box).
-    2. The GitHub Actions run kicks off (brief).
-    3. Aido posts its review — scroll the inline suggestions + faceted notes.
-  Keep it tight; loop the payoff (the posted comment), not the waiting.
+One companion, the whole review lifecycle: **review, summarize, explain, document, test, and triage** — with **Gemini, ChatGPT, Claude, or any OpenAI-compatible model** (Mistral, DeepSeek, …), right inside GitHub Actions. Install with a single workflow file.
 
 <p align="center">
   <img src="docs/media/aido-demo.gif" alt="Aido reviewing a pull request, live in GitHub" width="820">
 </p>
--->
 
 ---
 
@@ -37,14 +32,16 @@ One companion, the whole review lifecycle: **review, summarize, explain, documen
 These are **real Aido comments** on demo PRs — click any command to see the full,
 rendered output in GitHub:
 
-| Command | What it does | Live demo |
-|---|---|---|
-| `aido review` | Multi-persona review + digest, inline applyable suggestions | [PR #64](https://github.com/aido-dev/aido/pull/64) |
-| `aido suggest` | Concrete improvements & small refactors | [PR #65](https://github.com/aido-dev/aido/pull/65) |
-| `aido test` | Test plan, coverage gaps, follow-ups | [PR #66](https://github.com/aido-dev/aido/pull/66) |
-| `aido explain` | Developer-focused step-by-step walkthrough | [PR #67](https://github.com/aido-dev/aido/pull/67) |
-| `aido summarize` | High-level summary for stakeholders | [PR #68](https://github.com/aido-dev/aido/pull/68) |
-| `aido docs` | Draft/augment documentation | [PR #69](https://github.com/aido-dev/aido/pull/69) |
+| Command          | What it does                                                | Live demo                                          |
+| ---------------- | ----------------------------------------------------------- | -------------------------------------------------- |
+| `aido review`    | Multi-persona review + digest, inline applyable suggestions | [PR #64](https://github.com/aido-dev/aido/pull/64) |
+| `aido suggest`   | Concrete improvements & small refactors                     | [PR #65](https://github.com/aido-dev/aido/pull/65) |
+| `aido test`      | Test plan, coverage gaps, follow-ups                        | [PR #66](https://github.com/aido-dev/aido/pull/66) |
+| `aido explain`   | Developer-focused step-by-step walkthrough                  | [PR #67](https://github.com/aido-dev/aido/pull/67) |
+| `aido summarize` | High-level summary for stakeholders                         | [PR #68](https://github.com/aido-dev/aido/pull/68) |
+| `aido docs`      | Draft/augment documentation                                 | [PR #69](https://github.com/aido-dev/aido/pull/69) |
+
+> 🔬 **One PR, three models:** [**PR #106**](https://github.com/aido-dev/aido/pull/106) reviews the **same diff with Claude, ChatGPT, and Gemini** side by side — same personas, different provider. A concrete look at what "bring your own model" buys you: each catches the core bugs, but they differ on depth and which second-order issues they flag.
 
 <details>
 <summary><b>Sample: <code>aido review</code> catching real bugs</b> (from PR #64)</summary>
@@ -54,12 +51,14 @@ rendered output in GitHub:
 > **Recommendation:** Request changes
 >
 > **Faceted Notes:**
+>
 > - **Security:** Critical SQL injection vulnerability; bare `except` masks errors and potential security issues.
 > - **Correctness:** Mutable default argument leads to unexpected state; missing input validation for order dictionary keys.
 > - **Maintainability:** Use of "magic numbers" reduces readability and makes updates difficult.
 > - **QA/Testing:** Bare `except` swallows all errors, making specific failure modes hard to test.
 
 Code fixes are delivered as **inline "Apply suggestion" buttons** on the diff — not dumped in the comment body.
+
 </details>
 
 <details>
@@ -70,6 +69,7 @@ Code fixes are delivered as **inline "Apply suggestion" buttons** on the diff �
 > **Intent** — Control the rate at which operations run. Uncontrolled access can lead to resource exhaustion, instability, or abuse. The token-bucket allows short bursts (while tokens last) while enforcing a long-term average rate.
 >
 > **Design choices**
+>
 > - **`time.monotonic()` for timestamps** — immune to wall-clock/NTP adjustments that could unfairly reset a limit.
 > - **"Lazy" continuous refill** — tokens are recomputed on each `allow()` call instead of by a background thread, avoiding thread overhead.
 > - **Capacity cap** — `min(capacity, …)` stops tokens accumulating indefinitely.
@@ -77,6 +77,7 @@ Code fixes are delivered as **inline "Apply suggestion" buttons** on the diff �
 > **Risks & edge cases** — not thread-safe (`tokens`/`updated` mutated without a lock); single-process only (no distributed limiting); `refill_per_sec = 0` degrades to a fixed budget.
 
 Aido reads the diff and explains intent, mechanics, design rationale, **and** the risks — so a human understands code they didn't write.
+
 </details>
 
 ---
@@ -96,7 +97,7 @@ That's it — Aido replies right in the PR. [Full install options ↓](#-quick-s
 - 🤖 **Auto-companion for AI-authored PRs** — when Copilot / Claude Code / Cursor open a PR, Aido runs automatically (explain + summarize by default; review/docs/test opt-in)
 - ⚡ **On-demand on any PR or issue** — `aido review`, `summarize`, `explain`, `docs`, `suggest`, `test`, `triage`
 - 🧩 Consolidated, persona-guided reviewer with **applyable inline suggestions** (robust validation, zero false positives)
-- 🔌 **Multi-provider, bring-your-own-key:** Gemini (default), ChatGPT, Claude — no third-party data processor
+- 🔌 **Multi-provider, bring-your-own-key:** Gemini (default), ChatGPT, Claude, or **any OpenAI-compatible endpoint** (Mistral, DeepSeek, Kimi, Grok, …) — no third-party data processor
 - 📦 **One-file install** from a pinned release tag; upgrading is a one-line bump
 - 🔧 Fully configurable prompts, personas, tones, and per-command models
 
@@ -108,8 +109,21 @@ That's it — Aido replies right in the PR. [Full install options ↓](#-quick-s
   - `GEMINI_API_KEY` (required for default provider)
   - `CHATGPT_API_KEY` (if using ChatGPT)
   - `CLAUDE_API_KEY` (if using Claude)
+  - `OPENAI_API_KEY` (if using an OpenAI-compatible endpoint — DeepSeek, Kimi, Grok, …)
 - Uses the built-in **`GITHUB_TOKEN`** for posting comments and reviews.
 - ⚠️ **Forked PRs**: repository secrets may be unavailable due to GitHub policy.
+
+---
+
+## 🆓 Free to run
+
+Aido has **no hosted service and no third-party data processor** — it runs on **GitHub Actions' free minutes** with **your own provider key**. Several providers have free tiers, so you can get **free AI PR reviews**:
+
+- **Google Gemini** _(Aido's default)_ — grab a free key at **[Google AI Studio](https://aistudio.google.com/apikey)** and add it as the `GEMINI_API_KEY` secret. That's the whole [60-second start](#-60-second-start).
+- **Mistral** — free **"Experiment"** tier at **[console.mistral.ai](https://console.mistral.ai)**. Use the OpenAI-compatible provider (`provider: "OPENAI"`, `baseURL: "https://api.mistral.ai/v1"`) with the key as `OPENAI_API_KEY` — see [Bring any model](#bring-any-model-openai-compatible).
+- **Other OpenAI-compatible endpoints** with free tiers work the same way (e.g. OpenRouter `:free` models, Groq, Cerebras) — check each provider's current limits.
+
+> Free tiers are **rate-limited** — fine for most repos; for a busy one, a paid key avoids throttling.
 
 ---
 
@@ -160,6 +174,36 @@ digest code they didn't write.
 
 ---
 
+## 🗓️ Weekly "what shipped" digest
+
+On a schedule, Aido summarizes the PRs **merged in the last window** (default 7
+days) into a skimmable digest and posts it as a new **GitHub Issue** (or **Discussion**) —
+_"📦 What shipped — Aug 2 – Aug 9, 2026"_. The digest groups the notable changes
+and includes a line on how many of them were **opened by AI agents**.
+
+**See a live example** (generated by this repo's own digest): [as a GitHub Issue](https://github.com/aido-dev/aido/issues/92) · [as a Discussion](https://github.com/aido-dev/aido/discussions/93).
+
+- Add `.github/workflows/aido-digest.yml` (copy-based) or `examples/remote/aido-digest.yml` (remote install).
+- Configure the window, model, label, and cadence in `.github/scripts/digest/aido-digest-config.json`.
+- **Only posts when there's something to report** — a quiet window (no merged PRs) produces nothing (`skipEmpty`, default `true`; set to `false` for a weekly heartbeat).
+- **Post to an Issue or a Discussion** — set `destination` to `"issue"` (default) or `"discussion"` (with `discussionCategory`; needs Discussions enabled + `discussions: write`).
+- Runs on a weekly **cron** plus **manual dispatch** — edit the `cron` in the workflow to change cadence (keep `lookbackDays` in sync).
+- Needs `issues: write` (to open the digest issue) and `pull-requests: read`.
+
+```jsonc
+// .github/scripts/digest/aido-digest-config.json
+{
+  "provider": "GEMINI",
+  "model": { "GEMINI": "gemini-2.5-flash" },
+  "lookbackDays": 7,
+  "maxPrs": 40,
+  "label": "digest",
+  "skipEmpty": true,
+}
+```
+
+---
+
 ## 🧩 Use Aido as a GitHub Action (a step in your workflow)
 
 Prefer to control exactly when Aido runs? Add it as a **step** in your own
@@ -195,6 +239,7 @@ For `triage`, pass `issue_number` instead of `pr_number`. See
    - `GEMINI_API_KEY` (default provider)
    - `CHATGPT_API_KEY` (if using ChatGPT)
    - `CLAUDE_API_KEY` (if using Claude)
+   - `OPENAI_API_KEY` (if using an OpenAI-compatible endpoint — DeepSeek, Kimi, Grok, …)
 2. Copy [`examples/remote/aido.yml`](examples/remote/aido.yml) to `.github/workflows/aido.yml` — a single thin workflow that runs Aido from a pinned release tag. Upgrading is a one-line tag bump.
 3. Comment `aido review` on a PR.
 4. (Optional) Customize any command by adding its config file (e.g. `.github/scripts/review/aido-review-config.json`) — overrides the shipped defaults, no scripts needed. See [`examples/remote/`](examples/remote/) for details.
@@ -255,7 +300,7 @@ Each workflow builds a prompt from PR context (title, body, changed files, **tru
 ## Scripts & Configs
 
 - **Shared library (required by all commands):** `.github/scripts/lib/`
-  - `providers.js` — AI provider wrappers (ChatGPT / Gemini / Claude), model resolution
+  - `providers.js` — AI provider wrappers (ChatGPT / Gemini / Claude, plus a generic **OpenAI-compatible** provider for DeepSeek, Kimi, Grok, Mistral, OpenRouter, and self-hosted gateways), model resolution
   - `github.js` — GitHub API client, event parsing, PR context fetchers, comment posting
   - `config.js` — JSON config loading with defaults and deep merge
   - `text.js` — truncation, files summary, prompt templates, comment footers
@@ -280,8 +325,33 @@ Each workflow builds a prompt from PR context (title, body, changed files, **tru
 - **Triage (issues):**
   - Script: `.github/scripts/triage/aido-triage.js`
   - Config: `.github/scripts/triage/aido-triage-config.json` _(adds `candidateLabels`, `severityLabels`, and `applyLabels` to optionally auto-apply suggested labels; default `false`)_
+- **Digest (scheduled "what shipped"; runs on a schedule + manual dispatch, not an `aido <cmd>` comment):**
+  - Script: `.github/scripts/digest/aido-digest.js`
+  - Workflow: `.github/workflows/aido-digest.yml` _(weekly `cron` + `workflow_dispatch`; needs `issues: write` and, for Discussions, `discussions: write`)_
+  - Config: `.github/scripts/digest/aido-digest-config.json` _(adds `lookbackDays`, `maxPrs`, `label`, `title`, `skipEmpty`, `aiAuthors`, and `destination` — `"issue"` (default) or `"discussion"` with `discussionCategory`. Posts the digest as a GitHub Issue or Discussion; with `skipEmpty` (default `true`) a window with no merged PRs posts nothing.)_
 
-> Each config supports: `provider` (CHATGPT|GEMINI|CLAUDE), `model`, `language`, `tone`, `style`, `length`, `include` (title/body/filesSummary/diff), `additionalInstructions`, and an optional `promptTemplate` with placeholders.
+> Each config supports: `provider` (CHATGPT|GEMINI|CLAUDE|OPENAI), `model` (a provider-keyed map, e.g. `"model": { "CLAUDE": "claude-opus-5" }`), `baseURL` (for the `OPENAI` provider), `language`, `tone`, `style`, `length`, `include` (title/body/filesSummary/diff), `additionalInstructions`, and an optional `promptTemplate` with placeholders.
+>
+> **Choosing a model:** set `model` per provider. Any current Claude model works — Opus (4.6 / 4.7 / 4.8 / 5), Fable 5, Sonnet 4.6, Haiku 4.5. Aido sends no sampling `temperature` to Claude (recent models manage it internally and reject the parameter), so the latest models work out of the box.
+>
+> **Diff size (`summarize` / `explain` / `docs`):** these commands truncate the PR diff to keep prompts efficient. The default budget is **60,000 characters** (raised to match modern context windows). Override per-repo with **`maxDiffChars`** — a positive number sets the budget, and **`0`** or **`"none"`** sends the **full diff** (be mindful of token cost and provider request-size limits on very large PRs). `review` sends the full diff and isn't affected.
+
+### Bring any model (OpenAI-compatible)
+
+Beyond the three first-class providers (Gemini, ChatGPT, Claude), Aido ships a generic **`OPENAI`** provider for any endpoint that speaks the OpenAI `/chat/completions` API — **DeepSeek, Kimi (Moonshot), Grok (xAI), Mistral, OpenRouter**, and self-hosted gateways. Set `provider: "OPENAI"`, point `baseURL` at the endpoint, and put the key in the **`OPENAI_API_KEY`** secret:
+
+```jsonc
+// e.g. .github/scripts/review/aido-review-config.json — DeepSeek
+{
+  "reviewer": {
+    "provider": "OPENAI",
+    "baseURL": "https://api.deepseek.com",
+    "model": { "OPENAI": "deepseek-chat" },
+  },
+}
+```
+
+One key, one endpoint, any model — nothing else to install. (`temperature` is opt-in here too, so reasoning-style endpoints that reject it still work.)
 
 ---
 
@@ -289,9 +359,14 @@ Each workflow builds a prompt from PR context (title, body, changed files, **tru
 
 - Use a single **consolidated reviewer** informed by your configured personas in `aido-review-config.json`.
   - Top-level `reviewer` chooses provider/model (and optional context checks).
-  - `personas` define roles with prompt/tone/style/language to guide faceted notes.
+  - `personas` define roles with prompt/tone/style/language to guide the review.
+- **Persona house rules apply to the inline suggestions too.** Each persona's `prompt` (or `description`) text — e.g. _"this repo uses neon-http; never suggest wrapping single statements in a transaction"_ — is injected into **both** the faceted review and the inline-suggestions pass, so a suggestion won't contradict your stated constraints.
 - The review body contains a clean summary, recommendation, faceted notes, and optional context checks.
 - All code changes are delivered as **inline PR review suggestions** (with “Apply suggestion” buttons), thoroughly validated for safety and actionability — not in the body.
+- **Controls** (under `reviewer`):
+  - `suggestions: false` — skip the inline-suggestions pass entirely (keep the faceted review body, zero inline comments).
+  - `maxSuggestions: N` — cap the number of inline suggestions posted.
+  - `verifyReferences`, `checkDescriptionConsistency` — optional context checks.
 - **Keep it reasonable:** start with **3–5 personas** (e.g., pedagogy, architecture, security, performance, QA).
 
 **Pre-curated packs:** see `/examples/.github/review/example personas/`
@@ -317,6 +392,7 @@ Each workflow builds a prompt from PR context (title, body, changed files, **tru
 
 - Diff is truncated (~15k chars) to keep prompts efficient.
 - Provider/model availability and naming can change; set explicit models in configs.
+- Sampling `temperature` is only sent to ChatGPT and Gemini — current Claude models (Opus 4.7+/Fable 5) reject it, so Aido omits it for Claude and lets the model default apply.
 - Forked PRs may lack secrets → provider calls may be skipped.
 
 ---
