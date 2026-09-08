@@ -5,7 +5,21 @@ This project follows [Semantic Versioning](https://semver.org/) and uses Convent
 
 ---
 
-## [v1.6.6] - 2026-08-22
+## [Unreleased]
+
+### 🐛 Bug Fixes
+
+- **review:** Stop the context-check from false-flagging `examples/` template copies. Those files import `../lib/*` that only resolve once installed into a real repo's `.github/scripts/`, so the import-existence check reported spurious "JS import missing" findings on any PR touching `examples/`. Reference checks now skip `examples/` paths.
+
+## [v1.6.7] - 2026-09-08
+
+### ✨ New Features
+
+- **review/summarize/explain/docs:** **Exclude non-reviewable files from the diff** sent to the LLM. Lockfiles (`package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `go.sum`, `Cargo.lock`, …), minified bundles (`*.min.js`/`*.min.css`), source maps, `dist/`·`build/`·`vendor/`·`node_modules/`, snapshots, and generated files are now stripped before prompting. On PRs that touch those (a lockfile bump alone can be thousands of lines) this **cuts token usage sharply and reduces review noise**. Configurable per command via **`excludePaths`** (globs, unioned with the built-in defaults; set `excludeDefaults: false` to use only your own list). Excluded files are also skipped for inline suggestions.
+
+### ⚡ Performance
+
+- **review:** Run the consolidated review and the inline-suggestions pass **concurrently**. They're independent LLM calls (neither uses the other's output), so running them in parallel **roughly halves review latency**. The suggestions pass stays best-effort — a failure there still posts the review body.
 
 ### 🔒 Security
 

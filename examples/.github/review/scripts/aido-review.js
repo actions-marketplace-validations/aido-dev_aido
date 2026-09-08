@@ -42,7 +42,12 @@
 const fs = require('fs');
 const path = require('path');
 const { DEFAULT_MODELS, generate } = require('../lib/providers');
-const { SECURITY_GUARDRAIL } = require('../lib/text');
+const {
+  SECURITY_GUARDRAIL,
+  isExcludedPath,
+  resolveExcludeGlobs,
+  filterDiffByPath,
+} = require('../lib/text');
 const {
   octokit,
   getRepo,
@@ -126,7 +131,16 @@ function capSuggestions(list, reviewerCfg) {
 async function getPrContext(owner, repo, prNumber) {
   const pr = await getPr(owner, repo, prNumber);
   const { issueTitle, issueBody } = await getLinkedIssue(owner, repo, pr.body);
-  const diff = await getPrDiff(owner, repo, prNumber);
+  const rawDiff = await getPrDiff(owner, repo, prNumber);
+
+  // Drop non-reviewable noise (lockfiles, minified/build/vendor, generated, …)
+  // before it reaches the prompt — cuts tokens and review noise.
+  const { diff, excluded } = filterDiffByPath(rawDiff, resolveExcludeGlobs(reviewerCfg));
+  if (excluded.length) {
+    console.log(
+      `[Aido] Excluded ${excluded.length} non-reviewable file(s): ${excluded.join(', ')}`,
+    );
+  }
 
   return {
     prTitle: pr.title,
@@ -140,7 +154,10 @@ async function getPrContext(owner, repo, prNumber) {
 
 async function getCommentableFiles(owner, repo, prNumber) {
   const files = await getPrFiles(owner, repo, prNumber);
-  const commentableFiles = files.filter((f) => f.patch && f.status !== 'removed');
+  const excludeGlobs = resolveExcludeGlobs(reviewerCfg);
+  const commentableFiles = files.filter(
+    (f) => f.patch && f.status !== 'removed' && !isExcludedPath(f.filename, excludeGlobs),
+  );
 
   console.log('\n=== PR Files and Patches ===');
   commentableFiles.forEach((f) => {
@@ -601,6 +618,16 @@ function resolveJsImportPath(baseDir, spec) {
   return candidates.map((p) => path.join(baseDir, p));
 }
 
+/**
+ * Whether a path is a template copy under `examples/`. Those files import
+ * `../lib/*` (etc.) that only resolve once dropped into a real repo's
+ * `.github/scripts/`, so reference-existence checks would always false-positive
+ * on them. Skip ref checks for such paths.
+ */
+function isTemplateRefPath(filename) {
+  return /(?:^|\/)examples\//.test(filename || '');
+}
+
 async function collectContextChecks(owner, repo, context, files, reviewerCfg) {
   const findings = [];
   const verifyRefs =
@@ -634,7 +661,9 @@ async function collectContextChecks(owner, repo, context, files, reviewerCfg) {
 
   if (verifyRefs) {
     // Python import checks
-    for (const f of files.filter((x) => x.filename.endsWith('.py'))) {
+    for (const f of files.filter(
+      (x) => x.filename.endsWith('.py') && !isTemplateRefPath(x.filename),
+    )) {
       const baseDir = path.dirname(f.filename);
       const src = fileContents[f.filename] || '';
 
@@ -677,7 +706,9 @@ async function collectContextChecks(owner, repo, context, files, reviewerCfg) {
     }
 
     // JS/TS import checks
-    for (const f of files.filter((x) => /\.(?:[cm]?jsx?|tsx?)$/.test(x.filename))) {
+    for (const f of files.filter(
+      (x) => /\.(?:[cm]?jsx?|tsx?)$/.test(x.filename) && !isTemplateRefPath(x.filename),
+    )) {
       const baseDir = path.dirname(f.filename);
       const src = fileContents[f.filename] || '';
 
@@ -785,26 +816,37 @@ async function main() {
     return generate(provider, prompt, opts);
   };
 
-  const consolidatedPrompt = makeConsolidatedPrompt(personas, context);
-  const consolidated = await callProvider(consolidatedPrompt);
+  // The consolidated review and the inline-suggestions pass are independent
+  // (neither uses the other's output), so run them concurrently to roughly
+  // halve wall-clock latency. The suggestions pass is best-effort: wrap it so a
+  // rejection is captured as a value (never an unhandled rejection if the
+  // required consolidated pass throws first).
+  const consolidatedPromise = callProvider(makeConsolidatedPrompt(personas, context));
+  const suggestionsPromise = suggestionsEnabled(reviewerCfg)
+    ? callProvider(makeSuggestionsPrompt(personas, context, files)).then(
+        (text) => ({ text }),
+        (err) => ({ err }),
+      )
+    : null;
 
+  const consolidated = await consolidatedPromise;
   console.log('Consolidated review completed');
 
   // Suggestions-only pass (best-effort; skippable via reviewer.suggestions=false).
-  // It now receives the shared reviewer context so it honors the same personas
+  // It receives the shared reviewer context so it honors the same personas
   // and house rules as the consolidated review above.
   let suggestionsOnlyText = '';
   let suggestionsError = null;
-  if (suggestionsEnabled(reviewerCfg)) {
-    const suggestionsOnlyPrompt = makeSuggestionsPrompt(personas, context, files);
-    try {
-      suggestionsOnlyText = await callProvider(suggestionsOnlyPrompt);
-      console.log('Suggestions extraction completed');
-    } catch (e) {
-      suggestionsError = e;
+  if (suggestionsPromise) {
+    const res = await suggestionsPromise;
+    if (res.err) {
+      suggestionsError = res.err;
       console.error(
-        `Suggestions pass failed; posting review body without inline suggestions: ${e?.message || e}`,
+        `Suggestions pass failed; posting review body without inline suggestions: ${res.err?.message || res.err}`,
       );
+    } else {
+      suggestionsOnlyText = res.text;
+      console.log('Suggestions extraction completed');
     }
   } else {
     console.log('Inline suggestions disabled via reviewer.suggestions=false');
@@ -994,4 +1036,5 @@ module.exports = {
   suggestionsEnabled,
   capSuggestions,
   reviewEventFromBody,
+  isTemplateRefPath,
 };
